@@ -218,7 +218,7 @@ export default function App() {
           </div>
 
           {/* Friends List */}
-          <div className="w-full max-w-md">
+          <div className="w-full max-w-md mt-4">
             <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">who's here</h3>
             {friends.filter(isOnline).length === 0 && <p className="text-center text-slate-300 italic py-4">no one is here yet.</p>}
             
