@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  /* Force lowercase everywhere */
+  text-transform: lowercase;
+  background-color: #ffffff;
+  color: #475569; /* Slate-600 */
+}
+
+/* Hide scrollbar for cleaner look */
+::-webkit-scrollbar {
+  display: none;
+}
