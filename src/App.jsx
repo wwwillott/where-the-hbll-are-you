@@ -15,6 +15,7 @@ export default function App() {
   const [requests, setRequests] = useState([]); // Pending requests
   const [friendEmail, setFriendEmail] = useState('');
   const [view, setView] = useState('home'); // 'home' or 'add-friends'
+  const [locationNote, setLocationNote] = useState('');
 
   // --- 1. LOGIN & AUTO-CORRECT LOGIC ---
   useEffect(() => {
@@ -92,7 +93,8 @@ export default function App() {
     setIsInLibrary(newState);
     await updateDoc(doc(db, 'users', user.uid), {
       isInLibrary: newState,
-      lastCheckIn: newState ? serverTimestamp() : null
+      lastCheckIn: newState ? serverTimestamp() : null,
+      statusNote: newState ? locationNote : ""
     });
   };
 
@@ -203,6 +205,18 @@ export default function App() {
             <span className="text-sm opacity-80">{isInLibrary ? "letting people know..." : "tap to join"}</span>
           </button>
 
+          <div className="mt-4 w-full max-w-xs transition-opacity duration-300">
+            <input 
+              type="text"
+              value={locationNote}
+              onChange={(e) => setLocationNote(e.target.value.toLowerCase())}
+              placeholder="where are you?"
+              disabled={isInLibrary} // Lock the note once they are checked in
+              className={`w-full bg-transparent border-b border-slate-200 py-2 px-1 text-center outline-none text-slate-400 placeholder-slate-300 text-sm transition-all
+                ${isInLibrary ? 'opacity-50 border-transparent' : 'focus:border-sky-200'}`}
+            />
+          </div>
+
           {/* Friends List */}
           <div className="w-full max-w-md">
             <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">who's here</h3>
@@ -210,11 +224,19 @@ export default function App() {
             
             {friends.filter(isOnline).map(friend => (
               <div key={friend.email} className="flex items-center justify-between bg-sky-50 p-4 rounded-2xl mb-3">
-                <div className="flex items-center gap-3">
-                  <img src={friend.photoURL} className="w-10 h-10 rounded-full" alt="avatar" />
-                  <span className="font-bold text-slate-500">{friend.displayName.split(' ')[0]}</span>
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <img src={friend.photoURL} className="w-10 h-10 rounded-full flex-shrink-0" alt="avatar" />
+                  <div className="flex flex-col leading-tight overflow-hidden">
+                    <span className="font-bold text-slate-500">{friend.displayName?.split(' ')[0]}</span>
+                    {/* The New Status Note */}
+                    {friend.statusNote && (
+                      <span className="text-xs text-slate-400 truncate italic">
+                        {friend.statusNote}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <span className="text-xs text-sky-400 bg-white px-2 py-1 rounded-full font-bold">
+                <span className="text-xs text-sky-400 bg-white px-2 py-1 rounded-full font-bold flex-shrink-0">
                   {formatDistanceToNow(friend.lastCheckIn.toDate())}
                 </span>
               </div>
