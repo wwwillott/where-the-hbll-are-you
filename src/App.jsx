@@ -435,14 +435,14 @@ export default function App() {
           <div className="w-full max-w-md mb-8 relative opacity-80">
             <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">suggested friends</h3>
 
-            {SuggestedFriends.length === 0 ? (
+            {suggestedFriends.length === 0 ? (
               <p className="text-center text-slate-300 italic py-4">no suggestions right now.</p>
             ) : (
               <div className="relative px-2">
                 {(() => {
                   const itemsPerPage = 5;
-                  const totalPages = Math.ceil(SuggestedFriends.length / itemsPerPage);
-                  const visibleSuggestions = SuggestedFriends.slice(suggestedPage * itemsPerPage, (suggestedPage + 1) * itemsPerPage);
+                  const totalPages = Math.ceil(suggestedFriends.length / itemsPerPage);
+                  const visibleSuggestions = suggestedFriends.slice(suggestedPage * itemsPerPage, (suggestedPage + 1) * itemsPerPage);
 
                   return (
                     <>
@@ -460,14 +460,18 @@ export default function App() {
                       <div className="min-h-[380px]">
                         {visibleSuggestions.map((person, idx) => (
                           <div key={idx} className="flex items-center justify-between bg-white border-2 border-dashed border-slate-200 p-4 rounded-2xl mb-3 transition-all hover:border-sky-300 hover:shadow-sm">
-                            <div className="flex flex-col">
-                              <span className="font-bold text-slate-500">{person.name}</span>
-                              <span className="text-xs text-slate-400">{person.mutuals} mutual friends</span>
+                            
+                            <div className="flex items-center gap-3">
+                              <img src={person.photoURL} className="w-10 h-10 rounded-full" alt="avatar" />
+                              <div className="flex flex-col">
+                                <span className="font-bold text-slate-500">{person.name}</span>
+                                <span className="text-xs text-slate-400">{person.mutuals} mutual friends</span>
+                              </div>
                             </div>
+
                             <button 
                               onClick={() => {
                                 setFriendEmail(person.email);
-                                // We use a slight timeout so the state has time to update before triggering the send function
                                 setTimeout(sendFriendRequest, 100); 
                               }}
                               className="text-xs bg-sky-50 text-sky-500 px-3 py-1.5 rounded-full font-bold hover:bg-sky-400 hover:text-white transition-all"
