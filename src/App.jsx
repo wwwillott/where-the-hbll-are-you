@@ -56,37 +56,43 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- 2. DATA LISTENER (REWRITTEN FOR STABILITY) ---
+  // --- 2a. LISTEN TO MY DOC (Requests & Friend Emails) ---
+  const [friendEmails, setFriendEmails] = useState([]);
+
   useEffect(() => {
     if (!user) return;
-    
-    let unsubFriends = null;
-
-    const unsubUser = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
+    const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
       const data = docSnap.data();
-      if (!data) return;
-      
-      setRequests(data.requests || []);
-      const friendIds = data.friends || [];
-      
-      // If we already had a friends listener, kill it before making a new one
-      if (unsubFriends) unsubFriends();
-
-      if (friendIds.length > 0) {
-        const q = query(collection(db, 'users'), where('email', 'in', friendIds));
-        unsubFriends = onSnapshot(q, (snapshot) => {
-          setFriends(snapshot.docs.map(d => d.data()));
-        });
-      } else {
-        setFriends([]);
+      if (data) {
+        setRequests(data.requests || []);
+        // We sort them here so the 'in' query doesn't jump around
+        setFriendEmails(data.friends || []); 
       }
     });
-
-    return () => {
-      unsubUser();
-      if (unsubFriends) unsubFriends();
-    };
+    return () => unsub();
   }, [user]);
+
+  // --- 2b. LISTEN TO FRIENDS' DATA ---
+  useEffect(() => {
+    // Safety Check: if no friends, wipe state and STOP. 
+    // This kills the "Ghost Suggestions" bug.
+    if (!user || friendEmails.length === 0) {
+      setFriends([]);
+      return;
+    }
+
+    // Firestore 'in' query limit is 30. 
+    // Let's grab the first 30 to prevent a crash.
+    const cappedEmails = friendEmails.slice(0, 30);
+
+    const q = query(collection(db, 'users'), where('email', 'in', cappedEmails));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const friendData = snapshot.docs.map(d => d.data());
+      setFriends(friendData);
+    });
+
+    return () => unsub();
+  }, [user, friendEmails]); // This block RE-RUNS as soon as friendEmails changes
 
   // --- ACTIONS ---
   const handleLogin = async () => {
@@ -141,6 +147,9 @@ export default function App() {
       if (!snap.empty) {
         await updateDoc(doc(db, 'users', snap.docs[0].id), { friends: arrayUnion(user.email) });
       }
+      
+      setFriendEmails(prev => [...prev, requesterEmail]);
+
     } catch (error) { console.error(error); }
   };
 
@@ -169,6 +178,8 @@ export default function App() {
         });
       }
       
+      setFriendEmails(prev => prev.filter(e => e !== friendEmailToRemove));
+
       setDeletingFriend(null); 
     } catch (error) {
       console.error(error);
@@ -176,23 +187,44 @@ export default function App() {
     }
   };
 
-  // --- SUGGESTED FRIENDS ALGORITHM ---
+  // --- ACTUAL SUGGESTED FRIENDS ALGORITHM ---
   useEffect(() => {
     const calculateSuggested = async () => {
-      if (!user || friends.length === 0) return;
-      const myFriendEmails = friends.map(f => f.email);
+      // 1. CLEARANCE: If you have no friends, you CANNOT have mutuals. 
+      if (!user || friendEmails.length === 0) {
+        setSuggestedFriends([]);
+        return;
+      }
+
+      // 2. STABILIZER: Wait for both sides of the DB to finish deleting
+      await new Promise(resolve => setTimeout(resolve, 800));
+
       const usersSnap = await getDocs(collection(db, 'users'));
       let calculatedSuggestions = [];
 
       usersSnap.forEach(doc => {
         const otherUser = doc.data();
         const otherUserEmail = otherUser.email;
-        if (otherUserEmail === user.email || myFriendEmails.includes(otherUserEmail)) return;
+
+        // Skip self, current friends, or pending requests
+        if (
+          otherUserEmail === user.email || 
+          friendEmails.includes(otherUserEmail) ||
+          requests.includes(otherUserEmail)
+        ) {
+          return;
+        }
 
         const theirFriends = otherUser.friends || []; 
         let mutualCount = 0;
+
+        // 3. THE CRITICAL FIX: 
+        // We only count a mutual friend if that person is STILL in myFriendEmails.
+        // If we just deleted them, they aren't in this list, so mutualCount stays 0.
         theirFriends.forEach(fEmail => {
-          if (myFriendEmails.includes(fEmail)) mutualCount++;
+          if (friendEmails.includes(fEmail)) {
+            mutualCount++;
+          }
         });
 
         if (mutualCount > 0) {
@@ -204,11 +236,13 @@ export default function App() {
           });
         }
       });
+
       calculatedSuggestions.sort((a, b) => b.mutuals - a.mutuals);
       setSuggestedFriends(calculatedSuggestions);
     };
+
     calculateSuggested();
-  }, [friends, user]);
+  }, [friendEmails, user, requests]); // REMOVED 'friends' as a dependency to prevent loops
 
   // --- RENDER ---
   if (!user) {
