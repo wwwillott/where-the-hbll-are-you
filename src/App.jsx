@@ -147,6 +147,9 @@ export default function App() {
       if (!snap.empty) {
         await updateDoc(doc(db, 'users', snap.docs[0].id), { friends: arrayUnion(user.email) });
       }
+      
+      setFriendEmails(prev => [...prev, requesterEmail]);
+
     } catch (error) { console.error(error); }
   };
 
@@ -175,6 +178,8 @@ export default function App() {
         });
       }
       
+      setFriendEmails(prev => prev.filter(e => e !== friendEmailToRemove));
+
       setDeletingFriend(null); 
     } catch (error) {
       console.error(error);
@@ -185,14 +190,16 @@ export default function App() {
   // --- ACTUAL SUGGESTED FRIENDS ALGORITHM ---
   useEffect(() => {
     const calculateSuggested = async () => {
-      // 1. CLEARANCE CHECK: If your friend list is empty, 
-      // suggestions MUST be wiped immediately.
-      if (!user || friends.length === 0) {
+      // 1. IMMEDIATE CLEARANCE: If either list is empty, nuke suggestions.
+      if (!user || friendEmails.length === 0 || friends.length === 0) {
         setSuggestedFriends([]);
         return;
       }
 
-      const myFriendEmails = friends.map(f => f.email);
+      // 2. THE STABILIZER: Wait for Firestore to index the new relationship
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const myFriendEmails = friendEmails; 
       const usersSnap = await getDocs(collection(db, 'users'));
       let calculatedSuggestions = [];
 
@@ -200,8 +207,7 @@ export default function App() {
         const otherUser = doc.data();
         const otherUserEmail = otherUser.email;
 
-        // 2. The "Bridge" Check: Only suggest people if they are NOT you, 
-        // NOT already your friend, and NOT someone you have a pending request with.
+        // Skip self, current friends, or pending requests
         if (
           otherUserEmail === user.email || 
           myFriendEmails.includes(otherUserEmail) ||
@@ -213,7 +219,7 @@ export default function App() {
         const theirFriends = otherUser.friends || []; 
         let mutualCount = 0;
 
-        // 3. Count overlaps
+        // Count overlaps based on our live email list
         theirFriends.forEach(fEmail => {
           if (myFriendEmails.includes(fEmail)) {
             mutualCount++;
@@ -236,8 +242,8 @@ export default function App() {
 
     calculateSuggested();
     
-    // TRIGGER: Re-run every time your friends OR requests change
-  }, [friendEmails, user, requests]);
+    // Trigger on both the raw emails (fast) and the objects (detailed)
+  }, [friendEmails, friends, user, requests]);
 
   // --- RENDER ---
   if (!user) {
