@@ -167,6 +167,14 @@ export default function App() {
     return differenceInHours(new Date(), friend.lastCheckIn.toDate()) < 4;
   };
 
+  // --- SUGGESTED FRIENDS LOGIC (Mutals) ---
+  const getSuggestedFriends = () => {
+    // This is a placeholder for the UI. To actually fetch friends-of-friends 
+    // without downloading the entire database, we need to query based on our current friends' data.
+    // For now, let's set up the array structure so the UI works, and we can wire up the deep-query next.
+    return []; 
+  };
+
   // --- RENDER ---
   if (!user) {
     return (
@@ -244,34 +252,81 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <div className="px-6 flex flex-col items-center w-full">
-          {/* Add Friend Section */}
-          <div className="w-full max-w-md bg-slate-50 p-6 rounded-3xl mb-8">
+        <div className="px-6 flex flex-col items-center w-full pb-12">
+          
+          {/* 1. Add Friend Search */}
+          <div className="w-full max-w-md bg-slate-50 p-6 rounded-3xl mb-8 mt-4">
             <h2 className="text-sky-400 mb-4 font-bold">add a friend</h2>
             <div className="flex gap-2">
               <input 
                 value={friendEmail}
-                onChange={(e) => setFriendEmail(e.target.value)}
+                onChange={(e) => setFriendEmail(e.target.value.toLowerCase())}
                 placeholder="friend's email address"
-                className="flex-1 p-3 rounded-xl border-none outline-none text-sm"
+                className="flex-1 p-3 rounded-xl border-none outline-none text-sm bg-white focus:ring-2 focus:ring-sky-100 transition-all"
               />
-              <button onClick={sendFriendRequest} className="bg-sky-400 text-white px-4 rounded-xl font-bold">add</button>
+              <button onClick={sendFriendRequest} className="bg-sky-400 text-white px-4 rounded-xl font-bold shadow-md shadow-sky-200 hover:scale-105 transition-all">add</button>
             </div>
           </div>
 
-          {/* Requests List */}
-          <div className="w-full max-w-md">
-            <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">pending requests</h3>
-            {requests.length === 0 && <p className="text-center text-slate-300 italic">no pending requests.</p>}
-            {requests.map(reqEmail => (
-              <div key={reqEmail} className="flex items-center justify-between bg-white border border-slate-100 p-4 rounded-2xl mb-3 shadow-sm">
-                <span className="text-sm truncate mr-4">{reqEmail}</span>
-                <button onClick={() => acceptRequest(reqEmail)} className="bg-sky-100 text-sky-500 p-2 rounded-full hover:bg-sky-200">
-                  <Check size={18} />
-                </button>
-              </div>
-            ))}
+          {/* 2. Pending Requests */}
+          {requests.length > 0 && (
+            <div className="w-full max-w-md mb-8">
+              <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">pending requests</h3>
+              {requests.map(reqEmail => (
+                <div key={reqEmail} className="flex items-center justify-between bg-white border-2 border-sky-50 p-4 rounded-2xl mb-3 shadow-sm">
+                  <span className="text-sm truncate mr-4 font-bold text-slate-500">{reqEmail}</span>
+                  <button onClick={() => acceptRequest(reqEmail)} className="bg-sky-100 text-sky-500 p-2 rounded-full hover:bg-sky-400 hover:text-white transition-all">
+                    <Check size={18} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 3. Current Friends List (Color/Grayscale sorted) */}
+          <div className="w-full max-w-md mb-8">
+            <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">your friends</h3>
+            {friends.length === 0 && <p className="text-center text-slate-300 italic py-4">no friends yet.</p>}
+            
+            {/* Sort: Online first, then offline */}
+            {[...friends].sort((a, b) => isOnline(b) - isOnline(a)).map(friend => {
+              const online = isOnline(friend);
+              return (
+                <div key={friend.email} className={`flex items-center justify-between p-4 rounded-2xl mb-3 transition-all
+                  ${online ? 'bg-sky-50 shadow-sm' : 'bg-slate-50 grayscale-[50%] opacity-60 hover:grayscale-0 hover:opacity-100'}`}>
+                  
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <img src={friend.photoURL} className="w-10 h-10 rounded-full flex-shrink-0" alt="avatar" />
+                    <div className="flex flex-col leading-tight overflow-hidden">
+                      <span className="font-bold text-slate-500">{friend.displayName?.split(' ')[0]}</span>
+                      {friend.statusNote && online && (
+                        <span className="text-xs text-slate-400 truncate italic">
+                          {friend.statusNote}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {online ? (
+                    <span className="text-xs text-sky-400 bg-white px-2 py-1 rounded-full font-bold flex-shrink-0">
+                      {formatDistanceToNow(friend.lastCheckIn.toDate())}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-400 font-bold flex-shrink-0">away</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
+
+          {/* 4. Suggested Friends (UI Layout) */}
+          <div className="w-full max-w-md opacity-50">
+            <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">suggested friends (coming soon)</h3>
+            <div className="text-center p-6 border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 text-sm">
+              mutual friends algorithm loading...
+            </div>
+          </div>
+
         </div>
       )}
     </div>
