@@ -190,16 +190,15 @@ export default function App() {
   // --- ACTUAL SUGGESTED FRIENDS ALGORITHM ---
   useEffect(() => {
     const calculateSuggested = async () => {
-      // 1. IMMEDIATE CLEARANCE: If either list is empty, nuke suggestions.
-      if (!user || friendEmails.length === 0 || friends.length === 0) {
+      // 1. CLEARANCE: If you have no friends, you CANNOT have mutuals. 
+      if (!user || friendEmails.length === 0) {
         setSuggestedFriends([]);
         return;
       }
 
-      // 2. THE STABILIZER: Wait for Firestore to index the new relationship
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // 2. STABILIZER: Wait for both sides of the DB to finish deleting
+      await new Promise(resolve => setTimeout(resolve, 800));
 
-      const myFriendEmails = friendEmails; 
       const usersSnap = await getDocs(collection(db, 'users'));
       let calculatedSuggestions = [];
 
@@ -210,7 +209,7 @@ export default function App() {
         // Skip self, current friends, or pending requests
         if (
           otherUserEmail === user.email || 
-          myFriendEmails.includes(otherUserEmail) ||
+          friendEmails.includes(otherUserEmail) ||
           requests.includes(otherUserEmail)
         ) {
           return;
@@ -219,9 +218,11 @@ export default function App() {
         const theirFriends = otherUser.friends || []; 
         let mutualCount = 0;
 
-        // Count overlaps based on our live email list
+        // 3. THE CRITICAL FIX: 
+        // We only count a mutual friend if that person is STILL in myFriendEmails.
+        // If we just deleted them, they aren't in this list, so mutualCount stays 0.
         theirFriends.forEach(fEmail => {
-          if (myFriendEmails.includes(fEmail)) {
+          if (friendEmails.includes(fEmail)) {
             mutualCount++;
           }
         });
@@ -241,9 +242,7 @@ export default function App() {
     };
 
     calculateSuggested();
-    
-    // Trigger on both the raw emails (fast) and the objects (detailed)
-  }, [friendEmails, friends, user, requests]);
+  }, [friendEmails, user, requests]); // REMOVED 'friends' as a dependency to prevent loops
 
   // --- RENDER ---
   if (!user) {
