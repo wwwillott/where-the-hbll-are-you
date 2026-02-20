@@ -64,25 +64,29 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     
-    // Listen to MY user doc (for request list & friend IDs)
-    const unsubUser = onSnapshot(doc(db, 'users', user.uid), async (docSnap) => {
+    // Listen to MY user doc
+    const unsubUser = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
       const data = docSnap.data();
       if (!data) return;
       
       setRequests(data.requests || []);
       const friendIds = data.friends || [];
       
-      // If we have friends, fetch their live status
+      // FIX: If friendIds is empty, we MUST clear the state immediately
       if (friendIds.length > 0) {
-        // Firestore 'in' query supports max 10 items. For prod, split into chunks.
         const q = query(collection(db, 'users'), where('email', 'in', friendIds));
+        
+        // This listens to your friends' live statuses
         const unsubFriends = onSnapshot(q, (snapshot) => {
           setFriends(snapshot.docs.map(d => d.data()));
         });
+
+        return () => unsubFriends();
       } else {
         setFriends([]);
       }
     });
+
     return () => unsubUser();
   }, [user]);
 
