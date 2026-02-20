@@ -19,6 +19,7 @@ export default function App() {
   const [friendPage, setFriendPage] = useState(0);
   const [suggestedPage, setSuggestedPage] = useState(0);
   const [suggestedFriends, setSuggestedFriends] = useState([]);
+  const [deletingFriend, setDeletingFriend] = useState(null); // Holds the friend object we might delete
 
   // --- 1. LOGIN & AUTO-CORRECT LOGIC ---
   useEffect(() => {
@@ -168,6 +169,29 @@ export default function App() {
   const isOnline = (friend) => {
     if (!friend.isInLibrary || !friend.lastCheckIn) return false;
     return differenceInHours(new Date(), friend.lastCheckIn.toDate()) < 4;
+  };
+
+  const finalRemove = async () => {
+    if (!deletingFriend) return;
+    
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        friends: arrayRemove(deletingFriend.email)
+      });
+
+      const q = query(collection(db, 'users'), where('email', '==', deletingFriend.email));
+      const snap = await getDocs(q);
+      
+      if (!snap.empty) {
+        await updateDoc(doc(db, 'users', snap.docs[0].id), { 
+          friends: arrayRemove(user.email) 
+        });
+      }
+      setDeletingFriend(null); // Close the popup
+    } catch (error) {
+      console.error(error);
+      alert("could not remove friend.");
+    }
   };
 
   // --- SUGGESTED FRIENDS LOGIC (Mutals) ---
@@ -374,7 +398,7 @@ export default function App() {
                         {visibleFriends.map(friend => {
                           const online = isOnline(friend);
                           return (
-                            <div key={friend.email} className={`flex items-center justify-between p-4 rounded-2xl mb-3 transition-all
+                            <div key={friend.email} className={`group flex items-center justify-between p-4 rounded-2xl mb-3 transition-all
                               ${online ? 'bg-sky-50 shadow-sm' : 'bg-slate-50 grayscale-[50%] opacity-60 hover:grayscale-0 hover:opacity-100'}`}>
                               
                               <div className="flex items-center gap-3 overflow-hidden">
@@ -396,6 +420,14 @@ export default function App() {
                               ) : (
                                 <span className="text-xs text-slate-400 font-bold flex-shrink-0">away</span>
                               )}
+
+                              {/* --- THE REMOVE BUTTON --- */}
+                              <button 
+                                onClick={() => setDeletingFriend(friend)} 
+                                className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-400 transition-all duration-200"
+                              >
+                                <X size={18} />
+                              </button>
                             </div>
                           );
                         })}
@@ -512,6 +544,35 @@ export default function App() {
             )}
           </div>
 
+        </div>
+      )}
+
+      {/* Custom Delete Confirmation Modal */}
+      {deletingFriend && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl scale-in-center">
+            <h3 className="text-slate-600 font-bold text-lg text-center mb-2">
+              wait! are you sure you want to remove {deletingFriend.displayName?.split(' ')[0]} as a friend?
+            </h3>
+            <p className="text-slate-400 text-xs text-center mb-6">
+              you'll have to re-add them if you change your mind
+            </p>
+            
+            <div className="flex flex-col gap-2">
+              <button 
+                onClick={() => setDeletingFriend(null)}
+                className="w-full py-3 rounded-xl font-bold text-sky-500 bg-sky-50 hover:bg-sky-100 transition-colors"
+              >
+                nevermind
+              </button>
+              <button 
+                onClick={finalRemove}
+                className="w-full py-3 rounded-xl font-bold text-red-500 hover:text-red-600 transition-colors"
+              >
+                say goodbye
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
