@@ -12,13 +12,14 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [isInLibrary, setIsInLibrary] = useState(false);
   const [friends, setFriends] = useState([]);
-  const [requests, setRequests] = useState([]); // Pending requests
+  const [requests, setRequests] = useState([]); 
   const [friendEmail, setFriendEmail] = useState('');
-  const [view, setView] = useState('home'); // 'home' or 'add-friends'
+  const [view, setView] = useState('home'); 
   const [locationNote, setLocationNote] = useState('');
   const [friendPage, setFriendPage] = useState(0);
   const [suggestedPage, setSuggestedPage] = useState(0);
   const [suggestedFriends, setSuggestedFriends] = useState([]);
+  const [deletingFriend, setDeletingFriend] = useState(null); 
 
   // --- 1. LOGIN & AUTO-CORRECT LOGIC ---
   useEffect(() => {
@@ -29,7 +30,6 @@ export default function App() {
         const userSnap = await getDoc(userRef);
 
         if (!userSnap.exists()) {
-          // New User Setup
           await setDoc(userRef, {
             email: currentUser.email.toLowerCase(),
             displayName: currentUser.displayName,
@@ -39,14 +39,11 @@ export default function App() {
             requests: []
           });
         } else {
-          // EXISTING USER: CHECK STALE STATUS
           const data = userSnap.data();
           let currentStatus = data.isInLibrary;
 
           if (currentStatus && data.lastCheckIn) {
             const hoursSinceCheckIn = differenceInHours(new Date(), data.lastCheckIn.toDate());
-            
-            // FIX: If > 4 hours, force update to FALSE immediately
             if (hoursSinceCheckIn >= 4) {
               await updateDoc(userRef, { isInLibrary: false, lastCheckIn: null });
               currentStatus = false;
@@ -59,30 +56,36 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- 2. DATA LISTENER ---
+  // --- 2. DATA LISTENER (REWRITTEN FOR STABILITY) ---
   useEffect(() => {
     if (!user) return;
     
-    // Listen to MY user doc (for request list & friend IDs)
-    const unsubUser = onSnapshot(doc(db, 'users', user.uid), async (docSnap) => {
+    let unsubFriends = null;
+
+    const unsubUser = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
       const data = docSnap.data();
       if (!data) return;
       
       setRequests(data.requests || []);
       const friendIds = data.friends || [];
       
-      // If we have friends, fetch their live status
+      // If we already had a friends listener, kill it before making a new one
+      if (unsubFriends) unsubFriends();
+
       if (friendIds.length > 0) {
-        // Firestore 'in' query supports max 10 items. For prod, split into chunks.
         const q = query(collection(db, 'users'), where('email', 'in', friendIds));
-        const unsubFriends = onSnapshot(q, (snapshot) => {
+        unsubFriends = onSnapshot(q, (snapshot) => {
           setFriends(snapshot.docs.map(d => d.data()));
         });
       } else {
         setFriends([]);
       }
     });
-    return () => unsubUser();
+
+    return () => {
+      unsubUser();
+      if (unsubFriends) unsubFriends();
+    };
   }, [user]);
 
   // --- ACTIONS ---
@@ -103,9 +106,7 @@ export default function App() {
 
   const sendFriendRequest = async () => {
     if (!friendEmail) return;
-    const cleanEmail = friendEmail.trim().toLowerCase(); // <--- THE FIX
-    
-    // 1. Check if trying to add self
+    const cleanEmail = friendEmail.trim().toLowerCase();
     if (cleanEmail === user.email) {
       alert("you can't add yourself!");
       return;
@@ -114,123 +115,98 @@ export default function App() {
     try {
       const q = query(collection(db, 'users'), where('email', '==', cleanEmail));
       const querySnapshot = await getDocs(q);
-      
       if (querySnapshot.empty) {
-        alert('user not found! double check the spelling or ask them to sign in first.');
+        alert('user not found!');
         return;
       }
-
       const targetUser = querySnapshot.docs[0];
-      
-      // 2. Check if already friends
       if (targetUser.data().friends?.includes(user.email)) {
         alert("you are already friends!");
         return;
       }
-
-      await updateDoc(doc(db, 'users', targetUser.id), { 
-        requests: arrayUnion(user.email) 
-      });
-      
-      alert(`request sent to ${cleanEmail}!`);
+      await updateDoc(doc(db, 'users', targetUser.id), { requests: arrayUnion(user.email) });
+      alert(`request sent!`);
       setFriendEmail('');
-
-    } catch (error) {
-      console.error(error);
-      alert("something went wrong. check the console.");
-    }
+    } catch (error) { console.error(error); }
   };
 
   const acceptRequest = async (requesterEmail) => {
     try {
-      // 1. Add them to MY friends & remove request
       await updateDoc(doc(db, 'users', user.uid), {
         friends: arrayUnion(requesterEmail),
         requests: arrayRemove(requesterEmail)
       });
-
-      // 2. Add ME to THEIR friends (Mutual)
       const q = query(collection(db, 'users'), where('email', '==', requesterEmail));
       const snap = await getDocs(q);
-      
       if (!snap.empty) {
-        await updateDoc(doc(db, 'users', snap.docs[0].id), { 
-          friends: arrayUnion(user.email) 
-        });
-        alert("friend added!");
+        await updateDoc(doc(db, 'users', snap.docs[0].id), { friends: arrayUnion(user.email) });
       }
-    } catch (error) {
-      console.error(error);
-      alert("could not accept friend. check console.");
-    }
+    } catch (error) { console.error(error); }
   };
-  // Filter: Ignore friends who have been "Online" for > 4 hours (Visual Fallback)
+
   const isOnline = (friend) => {
     if (!friend.isInLibrary || !friend.lastCheckIn) return false;
     return differenceInHours(new Date(), friend.lastCheckIn.toDate()) < 4;
   };
 
-  // --- SUGGESTED FRIENDS LOGIC (Mutals) ---
-  const getSuggestedFriends = () => {
-    // This is a placeholder for the UI. To actually fetch friends-of-friends 
-    // without downloading the entire database, we need to query based on our current friends' data.
-    // For now, let's set up the array structure so the UI works, and we can wire up the deep-query next.
-    return []; 
+  // --- FINAL REMOVE (MUTUAL SYNC) ---
+  const finalRemove = async () => {
+    if (!deletingFriend) return;
+    const friendEmailToRemove = deletingFriend.email;
+
+    try {
+      // 1. Remove from MY doc
+      await updateDoc(doc(db, 'users', user.uid), {
+        friends: arrayRemove(friendEmailToRemove)
+      });
+
+      // 2. Remove from THEIR doc
+      const q = query(collection(db, 'users'), where('email', '==', friendEmailToRemove));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        await updateDoc(doc(db, 'users', snap.docs[0].id), { 
+          friends: arrayRemove(user.email) 
+        });
+      }
+      
+      setDeletingFriend(null); 
+    } catch (error) {
+      console.error(error);
+      alert("could not remove friend.");
+    }
   };
 
-  // --- ACTUAL SUGGESTED FRIENDS ALGORITHM ---
+  // --- SUGGESTED FRIENDS ALGORITHM ---
   useEffect(() => {
     const calculateSuggested = async () => {
-      // Don't run if we aren't logged in or have no friends yet
       if (!user || friends.length === 0) return;
-
-      // 1. Get an array of just the emails of your current friends
       const myFriendEmails = friends.map(f => f.email);
-
-      // 2. Fetch all users from the database 
-      // (For a campus MVP, fetching the whole users collection is totally fine)
       const usersSnap = await getDocs(collection(db, 'users'));
-      
       let calculatedSuggestions = [];
 
       usersSnap.forEach(doc => {
         const otherUser = doc.data();
         const otherUserEmail = otherUser.email;
+        if (otherUserEmail === user.email || myFriendEmails.includes(otherUserEmail)) return;
 
-        // Skip if it's YOU, or if they are ALREADY your friend
-        if (otherUserEmail === user.email || myFriendEmails.includes(otherUserEmail)) {
-          return;
-        }
-
-        // 3. Look at their friends list (assuming your database stores friends in an array called 'friends')
         const theirFriends = otherUser.friends || []; 
-        
-        // 4. Count the overlaps (Mutuals)
         let mutualCount = 0;
         theirFriends.forEach(fEmail => {
-          if (myFriendEmails.includes(fEmail)) {
-            mutualCount++;
-          }
+          if (myFriendEmails.includes(fEmail)) mutualCount++;
         });
 
-        // 5. If you have mutual friends, add them to the list
         if (mutualCount > 0) {
           calculatedSuggestions.push({
             email: otherUserEmail,
             name: otherUser.displayName?.split(' ')[0] || otherUserEmail,
-            photoURL: otherUser.photoURL || 'https://via.placeholder.com/40', // Fallback image
+            photoURL: otherUser.photoURL || 'https://via.placeholder.com/40',
             mutuals: mutualCount
           });
         }
       });
-
-      // 6. Sort by highest mutual friends first
       calculatedSuggestions.sort((a, b) => b.mutuals - a.mutuals);
-
-      // 7. Save it to state!
       setSuggestedFriends(calculatedSuggestions);
     };
-
     calculateSuggested();
   }, [friends, user]);
 
@@ -251,7 +227,7 @@ export default function App() {
     <div className="min-h-screen bg-white text-slate-600 font-medium">
       {/* Top Bar */}
       <div className="p-6 flex justify-between items-center">
-        <h1 className="text-xl text-sky-400 font-bold" onClick={() => setView('home')}>where the hbll are you?</h1>
+        <h1 className="text-xl text-sky-400 font-bold cursor-pointer" onClick={() => setView('home')}>where the hbll are you?</h1>
         <div className="flex gap-4">
           <button onClick={() => setView(view === 'home' ? 'add-friends' : 'home')}>
             {view === 'home' ? <UserPlus size={24} className="text-slate-300" /> : <Users size={24} className="text-slate-300" />}
@@ -262,7 +238,6 @@ export default function App() {
 
       {view === 'home' ? (
         <div className="flex flex-col items-center px-6">
-          {/* BIG BUTTON */}
           <button 
             onClick={toggleStatus}
             className={`w-64 h-64 rounded-full flex flex-col items-center justify-center transition-all duration-500 mb-12 shadow-2xl
@@ -272,19 +247,18 @@ export default function App() {
             <span className="text-sm opacity-80">{isInLibrary ? "letting people know..." : "tap to join"}</span>
           </button>
 
-          <div className="mt-4 w-full max-w-xs transition-opacity duration-300">
+          <div className="mt-4 w-full max-w-xs">
             <input 
               type="text"
               value={locationNote}
               onChange={(e) => setLocationNote(e.target.value.toLowerCase())}
               placeholder="where are you?"
-              disabled={isInLibrary} // Lock the note once they are checked in
+              disabled={isInLibrary}
               className={`w-full bg-transparent border-b border-slate-200 py-2 px-1 text-center outline-none text-slate-400 placeholder-slate-300 text-sm transition-all
                 ${isInLibrary ? 'opacity-50 border-transparent' : 'focus:border-sky-200'}`}
             />
           </div>
 
-          {/* Friends List */}
           <div className="w-full max-w-md mt-4">
             <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">who's here</h3>
             {friends.filter(isOnline).length === 0 && <p className="text-center text-slate-300 italic py-4">no one is here yet.</p>}
@@ -292,18 +266,13 @@ export default function App() {
             {friends.filter(isOnline).map(friend => (
               <div key={friend.email} className="flex items-center justify-between bg-sky-50 p-4 rounded-2xl mb-3">
                 <div className="flex items-center gap-3 overflow-hidden">
-                  <img src={friend.photoURL} className="w-10 h-10 rounded-full flex-shrink-0" alt="avatar" />
+                  <img src={friend.photoURL} className="w-10 h-10 rounded-full" alt="avatar" />
                   <div className="flex flex-col leading-tight overflow-hidden">
                     <span className="font-bold text-slate-500">{friend.displayName?.split(' ')[0]}</span>
-                    {/* The New Status Note */}
-                    {friend.statusNote && (
-                      <span className="text-xs text-slate-400 truncate italic">
-                        {friend.statusNote}
-                      </span>
-                    )}
+                    {friend.statusNote && <span className="text-xs text-slate-400 truncate italic">{friend.statusNote}</span>}
                   </div>
                 </div>
-                <span className="text-xs text-sky-400 bg-white px-2 py-1 rounded-full font-bold flex-shrink-0">
+                <span className="text-xs text-sky-400 bg-white px-2 py-1 rounded-full font-bold">
                   {formatDistanceToNow(friend.lastCheckIn.toDate())}
                 </span>
               </div>
@@ -312,8 +281,7 @@ export default function App() {
         </div>
       ) : (
         <div className="px-6 flex flex-col items-center w-full pb-12">
-          
-          {/* 1. Add Friend Search */}
+          {/* Add Friend Search */}
           <div className="w-full max-w-md bg-slate-50 p-6 rounded-3xl mb-8 mt-4">
             <h2 className="text-sky-400 mb-4 font-bold">add a friend</h2>
             <div className="flex gap-2">
@@ -321,20 +289,20 @@ export default function App() {
                 value={friendEmail}
                 onChange={(e) => setFriendEmail(e.target.value.toLowerCase())}
                 placeholder="friend's email address"
-                className="flex-1 p-3 rounded-xl border-none outline-none text-sm bg-white focus:ring-2 focus:ring-sky-100 transition-all"
+                className="flex-1 p-3 rounded-xl border-none outline-none text-sm bg-white"
               />
-              <button onClick={sendFriendRequest} className="bg-sky-400 text-white px-4 rounded-xl font-bold shadow-md shadow-sky-200 hover:scale-105 transition-all">add</button>
+              <button onClick={sendFriendRequest} className="bg-sky-400 text-white px-4 rounded-xl font-bold shadow-md shadow-sky-200">add</button>
             </div>
           </div>
 
-          {/* 2. Pending Requests */}
+          {/* Pending Requests */}
           {requests.length > 0 && (
             <div className="w-full max-w-md mb-8">
               <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">pending requests</h3>
               {requests.map(reqEmail => (
                 <div key={reqEmail} className="flex items-center justify-between bg-white border-2 border-sky-50 p-4 rounded-2xl mb-3 shadow-sm">
                   <span className="text-sm truncate mr-4 font-bold text-slate-500">{reqEmail}</span>
-                  <button onClick={() => acceptRequest(reqEmail)} className="bg-sky-100 text-sky-500 p-2 rounded-full hover:bg-sky-400 hover:text-white transition-all">
+                  <button onClick={() => acceptRequest(reqEmail)} className="bg-sky-100 text-sky-500 p-2 rounded-full hover:bg-sky-400 hover:text-white">
                     <Check size={18} />
                   </button>
                 </div>
@@ -342,15 +310,13 @@ export default function App() {
             </div>
           )}
 
-          {/* 3. Current Friends List (Paginated) */}
+          {/* Current Friends List */}
           <div className="w-full max-w-md mb-8 relative">
             <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">your friends</h3>
-            
             {friends.length === 0 ? (
               <p className="text-center text-slate-300 italic py-4">no friends yet.</p>
             ) : (
               <div className="relative px-2">
-                {/* Calculate Pagination */}
                 {(() => {
                   const sortedFriends = [...friends].sort((a, b) => isOnline(b) - isOnline(a));
                   const friendsPerPage = 5;
@@ -359,70 +325,38 @@ export default function App() {
 
                   return (
                     <>
-                      {/* Left Navigation Button */}
                       {friendPage > 0 && (
-                        <button 
-                          onClick={() => setFriendPage(p => p - 1)}
-                          className="absolute -left-4 top-1/2 -translate-y-1/2 bg-white rounded-full p-2 shadow-md text-slate-400 hover:text-sky-500 z-10 transition-all"
-                        >
-                          <ChevronLeft size={20} />
-                        </button>
+                        <button onClick={() => setFriendPage(p => p - 1)} className="absolute -left-4 top-1/2 -translate-y-1/2 bg-white rounded-full p-2 shadow-md z-10"><ChevronLeft size={20} /></button>
                       )}
 
-                      {/* The 5 Friends */}
-                      <div className="min-h-[380px]"> {/* Keeps container height stable so buttons don't jump */}
+                      <div className="min-h-[380px]">
                         {visibleFriends.map(friend => {
                           const online = isOnline(friend);
                           return (
-                            <div key={friend.email} className={`flex items-center justify-between p-4 rounded-2xl mb-3 transition-all
-                              ${online ? 'bg-sky-50 shadow-sm' : 'bg-slate-50 grayscale-[50%] opacity-60 hover:grayscale-0 hover:opacity-100'}`}>
-                              
+                            <div key={friend.email} className={`group flex items-center justify-between p-4 rounded-2xl mb-3 transition-all
+                              ${online ? 'bg-sky-50 shadow-sm' : 'bg-slate-50 opacity-60'}`}>
                               <div className="flex items-center gap-3 overflow-hidden">
-                                <img src={friend.photoURL} className="w-10 h-10 rounded-full flex-shrink-0" alt="avatar" />
+                                <img src={friend.photoURL} className="w-10 h-10 rounded-full" alt="avatar" />
                                 <div className="flex flex-col leading-tight overflow-hidden">
                                   <span className="font-bold text-slate-500">{friend.displayName?.split(' ')[0]}</span>
-                                  {friend.statusNote && online && (
-                                    <span className="text-xs text-slate-400 truncate italic">
-                                      {friend.statusNote}
-                                    </span>
-                                  )}
+                                  {friend.statusNote && online && <span className="text-xs text-slate-400 truncate italic">{friend.statusNote}</span>}
                                 </div>
                               </div>
-                              
-                              {online ? (
-                                <span className="text-xs text-sky-400 bg-white px-2 py-1 rounded-full font-bold flex-shrink-0">
-                                  {formatDistanceToNow(friend.lastCheckIn.toDate())}
-                                </span>
-                              ) : (
-                                <span className="text-xs text-slate-400 font-bold flex-shrink-0">away</span>
-                              )}
+                              <div className="flex items-center gap-3">
+                                {online ? (
+                                  <span className="text-xs text-sky-400 bg-white px-2 py-1 rounded-full font-bold whitespace-nowrap">{formatDistanceToNow(friend.lastCheckIn.toDate())}</span>
+                                ) : (
+                                  <span className="text-xs text-slate-400 font-bold">away</span>
+                                )}
+                                <button onClick={() => setDeletingFriend(friend)} className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-400 transition-all"><X size={18} /></button>
+                              </div>
                             </div>
                           );
                         })}
                       </div>
 
-                      {/* Right Navigation Button */}
                       {friendPage < totalPages - 1 && (
-                        <button 
-                          onClick={() => setFriendPage(p => p + 1)}
-                          className="absolute -right-4 top-1/2 -translate-y-1/2 bg-white rounded-full p-2 shadow-md text-slate-400 hover:text-sky-500 z-10 transition-all"
-                        >
-                          <ChevronRight size={20} />
-                        </button>
-                      )}
-
-                      {/* Instagram-style Dot Indicator */}
-                      {totalPages > 1 && (
-                        <div className="flex justify-center items-center gap-1.5 mt-2">
-                          {Array.from({ length: totalPages }).map((_, idx) => (
-                            <div 
-                              key={idx} 
-                              className={`h-1.5 rounded-full transition-all duration-300 ${
-                                idx === friendPage ? 'w-4 bg-sky-400' : 'w-1.5 bg-slate-200'
-                              }`}
-                            />
-                          ))}
-                        </div>
+                        <button onClick={() => setFriendPage(p => p + 1)} className="absolute -right-4 top-1/2 -translate-y-1/2 bg-white rounded-full p-2 shadow-md z-10"><ChevronRight size={20} /></button>
                       )}
                     </>
                   );
@@ -431,12 +365,11 @@ export default function App() {
             )}
           </div>
 
-          {/* 4. Suggested Friends List (Paginated) */}
+          {/* Suggested Friends */}
           <div className="w-full max-w-md mb-8 relative opacity-80">
             <h3 className="text-slate-300 mb-4 text-sm font-bold ml-2">suggested friends</h3>
-
             {suggestedFriends.length === 0 ? (
-              <p className="text-center text-slate-300 italic py-4">no suggestions right now.</p>
+              <p className="text-center text-slate-300 italic py-4">no suggestions.</p>
             ) : (
               <div className="relative px-2">
                 {(() => {
@@ -446,21 +379,12 @@ export default function App() {
 
                   return (
                     <>
-                      {/* Left Navigation Button */}
                       {suggestedPage > 0 && (
-                        <button 
-                          onClick={() => setSuggestedPage(p => p - 1)}
-                          className="absolute -left-4 top-1/2 -translate-y-1/2 bg-white rounded-full p-2 shadow-md text-slate-400 hover:text-sky-500 z-10 transition-all"
-                        >
-                          <ChevronLeft size={20} />
-                        </button>
+                        <button onClick={() => setSuggestedPage(p => p - 1)} className="absolute -left-4 top-1/2 -translate-y-1/2 bg-white rounded-full p-2 shadow-md z-10"><ChevronLeft size={20} /></button>
                       )}
-
-                      {/* The 5 Suggestions */}
                       <div className="min-h-[380px]">
                         {visibleSuggestions.map((person, idx) => (
-                          <div key={idx} className="flex items-center justify-between bg-white border-2 border-dashed border-slate-200 p-4 rounded-2xl mb-3 transition-all hover:border-sky-300 hover:shadow-sm">
-                            
+                          <div key={idx} className="flex items-center justify-between bg-white border-2 border-dashed border-slate-200 p-4 rounded-2xl mb-3">
                             <div className="flex items-center gap-3">
                               <img src={person.photoURL} className="w-10 h-10 rounded-full" alt="avatar" />
                               <div className="flex flex-col">
@@ -468,42 +392,12 @@ export default function App() {
                                 <span className="text-xs text-slate-400">{person.mutuals} mutual friends</span>
                               </div>
                             </div>
-
-                            <button 
-                              onClick={() => {
-                                setFriendEmail(person.email);
-                                setTimeout(sendFriendRequest, 100); 
-                              }}
-                              className="text-xs bg-sky-50 text-sky-500 px-3 py-1.5 rounded-full font-bold hover:bg-sky-400 hover:text-white transition-all"
-                            >
-                              add
-                            </button>
+                            <button onClick={() => { setFriendEmail(person.email); setTimeout(sendFriendRequest, 100); }} className="text-xs bg-sky-50 text-sky-500 px-3 py-1.5 rounded-full font-bold">add</button>
                           </div>
                         ))}
                       </div>
-
-                      {/* Right Navigation Button */}
                       {suggestedPage < totalPages - 1 && (
-                        <button 
-                          onClick={() => setSuggestedPage(p => p + 1)}
-                          className="absolute -right-4 top-1/2 -translate-y-1/2 bg-white rounded-full p-2 shadow-md text-slate-400 hover:text-sky-500 z-10 transition-all"
-                        >
-                          <ChevronRight size={20} />
-                        </button>
-                      )}
-
-                      {/* Instagram-style Dot Indicator */}
-                      {totalPages > 1 && (
-                        <div className="flex justify-center items-center gap-1.5 mt-2">
-                          {Array.from({ length: totalPages }).map((_, idx) => (
-                            <div 
-                              key={idx} 
-                              className={`h-1.5 rounded-full transition-all duration-300 ${
-                                idx === suggestedPage ? 'w-4 bg-sky-400' : 'w-1.5 bg-slate-200'
-                              }`}
-                            />
-                          ))}
-                        </div>
+                        <button onClick={() => setSuggestedPage(p => p + 1)} className="absolute -right-4 top-1/2 -translate-y-1/2 bg-white rounded-full p-2 shadow-md z-10"><ChevronRight size={20} /></button>
                       )}
                     </>
                   );
@@ -511,7 +405,20 @@ export default function App() {
               </div>
             )}
           </div>
+        </div>
+      )}
 
+      {/* Delete Confirmation Modal */}
+      {deletingFriend && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+          <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl">
+            <h3 className="text-slate-600 font-bold text-lg text-center mb-2">wait! remove {deletingFriend.displayName?.split(' ')[0]}?</h3>
+            <p className="text-slate-400 text-xs text-center mb-6">you'll have to re-add them if you change your mind</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={() => setDeletingFriend(null)} className="w-full py-3 rounded-xl font-bold text-sky-500 bg-sky-50">nevermind</button>
+              <button onClick={finalRemove} className="w-full py-3 rounded-xl font-bold text-red-500">say goodbye</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
