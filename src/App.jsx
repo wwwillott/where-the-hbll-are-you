@@ -237,7 +237,7 @@ export default function App() {
     calculateSuggested();
     
     // TRIGGER: Re-run every time your friends OR requests change
-  }, [friends, user, requests]);
+  }, [friendEmails, user, requests]);
 
   // --- RENDER ---
   if (!user) {
